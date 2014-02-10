@@ -53,7 +53,7 @@ static int fifo_open(struct inode *inode, struct file *file)
 {
     char is_cons = file->f_mode & FMODE_READ;
     char used = false;
-    struct fifo_t *f = vmalloc(sizeof(fifo_t));
+    struct fifo_t *f = vmalloc(sizeof(struct fifo_t));
     
     if(f == NULL)
         return -ENOMEM;
@@ -155,7 +155,7 @@ static int fifo_release(struct inode *inode, struct file *file)
 
     if( !(f->num_prod || f->num_cons) ){
         // El último en salir limpia.
-        inode->i_privete = NULL;
+        inode->i_private = NULL;
         removed = true;
     }
         
