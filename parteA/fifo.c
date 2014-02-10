@@ -13,7 +13,6 @@
  */
 
 DEFINE_SEMAPHORE(mutex_fifos);
-LIST_HEAD(fifos);
 
 static int Major;  
 
@@ -45,15 +44,7 @@ int init_module(void)
 
 void cleanup_module(void)
 {
-    fifo_list_t *aux, *elem = NULL;;
-    
     unregister_chrdev(Major, DEVICE_NAME);
-    
-    list_for_each_entry_safe(elem, aux, &fifos, links){
-        list_del(&elem->links);
-        destroy_fifo(&elem->fifo);
-        vfree(elem);
-    }
 }
 
 
@@ -62,14 +53,13 @@ static int fifo_open(struct inode *inode, struct file *file)
 {
     char is_cons = file->f_mode & FMODE_READ;
     char used = false;
-    fifo_list_t *new = vmalloc(sizeof(fifo_list_t));
-    struct fifo_t *f;
+    struct fifo_t *f = vmalloc(sizeof(fifo_t));
     
-    if(new == NULL)
+    if(f == NULL)
         return -ENOMEM;
 
-    if(init_fifo(&new->fifo) != 0){
-        vfree(new);
+    if(init_fifo(f) != 0){
+        vfree(f);
         return -ENOMEM;
     }
 
@@ -78,14 +68,15 @@ static int fifo_open(struct inode *inode, struct file *file)
         return -EINTR;
 
     if(inode->i_private == NULL){
-        inode->i_private = &new->fifo;
-        list_add(&new->links, &fifos);
+        inode->i_private = f;
         used = true;
     }
     up(&mutex_fifos);
 
-    if(!used) // Si no hemos usado el nuevo fivo (el inodo ya tenia fifo asociado)
-        vfree(new);
+    if(!used){ // Si no hemos usado el nuevo fivo (el inodo ya tenia fifo asociado)
+        vfree(f);
+        f = NULL;
+    }
 
     f = (struct fifo_t*) inode->i_private;
 
@@ -145,6 +136,8 @@ static int fifo_open(struct inode *inode, struct file *file)
 static int fifo_release(struct inode *inode, struct file *file)
 {
     struct fifo_t *f = (struct fifo_t*) inode->i_private;
+    char removed = false;
+
     // INCIO SECCIÓN CRÍTICA >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
     if (down_interruptible(&f->mutex)) 
         return -EINTR;
@@ -160,12 +153,20 @@ static int fifo_release(struct inode *inode, struct file *file)
         f->num_prod--;
 
 
-    if( !(f->num_prod || f->num_cons) )
-        clear_fifo(f);
-
+    if( !(f->num_prod || f->num_cons) ){
+        // El último en salir limpia.
+        inode->i_privete = NULL;
+        removed = true;
+    }
+        
     up(&f->mutex);
     // FIN SECCIÓN CRÍTICA <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
     
+    if(removed){ 
+        destroy_fifo(f);
+        vfree(f);
+    }
+
     DBGV("Pipe de %s cerrado con lecotres %d, escriores %d", 
             (file->f_mode & FMODE_READ)? "lectura": "escritura",
             f->num_cons, 
